@@ -2,11 +2,12 @@
  * ESP32 RFID Attendance System - Google Apps Script Backend
  * 
  * Features:
- * - Dynamic daily sheet creation (Format: DD-MM-YYYY)
- * - Enter/Exit smart toggling
- * - Automatic Daily Working Hours & Attendance Summary Table (with 2-row gap below logs)
- * - All text format left-justified (left-aligned)
- * - Live count of Entries, Exits, Total Duration Inside, and Real-time Status
+ * - Latest to Oldest Sorting: Row 2 is ALWAYS the latest punch!
+ * - Smart Enter/Exit Toggling
+ * - Exactly 2 blank rows gap before the Summary Table
+ * - Large, comfortable column widths
+ * - Left-justified formatting everywhere
+ * - Clean status ("Currently Inside", "Checked Out", "Absent" - NO green emoji)
  */
 
 function doGet(e) {
@@ -33,7 +34,7 @@ function doGet(e) {
   var found = false;
 
   for (var i = 1; i < usersData.length; i++) {
-    if (usersData[i][0].toString().trim().toUpperCase() === uid) {
+    if (usersData[i][0] && usersData[i][0].toString().trim().toUpperCase() === uid) {
       userName = usersData[i][1];
       personId = usersData[i][2];
       found = true;
@@ -57,6 +58,7 @@ function doGet(e) {
 
   var daySheet = ss.getSheetByName(todaySheetName);
 
+  // If new daily sheet, create with headers and large column widths
   if (!daySheet) {
     daySheet = ss.insertSheet(todaySheetName);
     daySheet.appendRow(["Time", "Card_UID", "Name", "ID_Number", "Action"]);
@@ -65,54 +67,45 @@ function doGet(e) {
     headerRange.setBackground("#1F4E79")
                .setFontColor("#FFFFFF")
                .setFontWeight("bold")
-               .setHorizontalAlignment("left"); // Left justified
+               .setHorizontalAlignment("left");
                
-    daySheet.setColumnWidth(1, 140);
-    daySheet.setColumnWidth(2, 140);
-    daySheet.setColumnWidth(3, 180);
-    daySheet.setColumnWidth(4, 120);
-    daySheet.setColumnWidth(5, 120);
-    daySheet.setColumnWidth(6, 160);
+    applyLargeColumnWidths(daySheet);
+  } else {
+    applyLargeColumnWidths(daySheet);
   }
 
-  // 3. Find if Summary Section already exists below the punch table
-  var allData = daySheet.getDataRange().getValues();
+  // 3. Find if Summary Section already exists
+  var sheetData = daySheet.getDataRange().getValues();
   var summaryTitleRow = -1; // 1-based index
-  for (var r = 0; r < allData.length; r++) {
-    if (allData[r][0] && allData[r][0].toString().indexOf("DAILY ATTENDANCE") >= 0) {
+  for (var r = 0; r < sheetData.length; r++) {
+    if (sheetData[r][0] && sheetData[r][0].toString().indexOf("DAILY ATTENDANCE") >= 0) {
       summaryTitleRow = r + 1;
       break;
     }
   }
 
   // 4. Determine nextAction (ENTER or EXIT)
-  // Punches are above the 2 blank rows
-  var punchLimit = (summaryTitleRow > 0) ? (summaryTitleRow - 3) : (allData.length - 1);
+  // Since Row 2 is ALWAYS the latest punch, scan from Row 2 down to find this user's most recent action
   var nextAction = "ENTER"; // default
+  var punchEndRow = (summaryTitleRow > 0) ? (summaryTitleRow - 1) : sheetData.length;
 
-  for (var j = punchLimit; j >= 1; j--) {
-    if (!allData[j] || !allData[j][1]) continue;
-    var rowUid = allData[j][1].toString().trim().toUpperCase();
+  for (var j = 1; j < punchEndRow; j++) {
+    if (!sheetData[j] || !sheetData[j][1]) continue;
+    var rowUid = sheetData[j][1].toString().trim().toUpperCase();
     if (rowUid === uid) {
-      var lastAction = allData[j][4];
+      var lastAction = sheetData[j][4];
       nextAction = (lastAction === "ENTER") ? "EXIT" : "ENTER";
       break;
     }
   }
 
-  // 5. Insert new punch row (Above the 2-row gap, preserving 2 blank cells before summary)
-  if (summaryTitleRow > 0) {
-    var insertAtRow = summaryTitleRow - 2; // Insert right above the 2 blank rows
-    daySheet.insertRowBefore(insertAtRow);
-    daySheet.getRange(insertAtRow, 1, 1, 5).setValues([[timeStr, uid, userName, personId, nextAction]]);
-    daySheet.getRange(insertAtRow, 1, 1, 5).setHorizontalAlignment("left"); // Left justified
-  } else {
-    daySheet.appendRow([timeStr, uid, userName, personId, nextAction]);
-    var newRowIdx = daySheet.getLastRow();
-    daySheet.getRange(newRowIdx, 1, 1, 5).setHorizontalAlignment("left"); // Left justified
-  }
+  // 5. INSERT NEW PUNCH AT ROW 2 (Latest always on top!)
+  daySheet.insertRowAfter(1); // Inserts blank row at row 2
+  var newPunchRange = daySheet.getRange(2, 1, 1, 5);
+  newPunchRange.setValues([[timeStr, uid, userName, personId, nextAction]]);
+  newPunchRange.setHorizontalAlignment("left");
 
-  // 6. Recalculate and update the Summary Table with 2-row gap and left justification
+  // 6. Recalculate and update the Summary Table below with 2-row gap
   updateDailySummaryTable(daySheet, usersData);
 
   return ContentService.createTextOutput(JSON.stringify({
@@ -125,9 +118,22 @@ function doGet(e) {
 }
 
 /**
- * Calculates total entries, exits, time inside, and status for every registered user
- * and maintains a 2-row gap between punch logs and the summary table.
- * All formatting is left-justified.
+ * Sets large, comfortable column widths so text is never truncated
+ */
+function applyLargeColumnWidths(sheet) {
+  sheet.setColumnWidth(1, 170); // Time
+  sheet.setColumnWidth(2, 170); // Card_UID
+  sheet.setColumnWidth(3, 250); // Name / Employee Name
+  sheet.setColumnWidth(4, 160); // ID_Number
+  sheet.setColumnWidth(5, 210); // Action / Total Working Hours
+  sheet.setColumnWidth(6, 210); // Status
+}
+
+/**
+ * Updates the summary table with:
+ * - 2-row blank gap
+ * - Left-aligned text
+ * - Clean status (NO green emoji)
  */
 function updateDailySummaryTable(daySheet, usersData) {
   var sheetData = daySheet.getDataRange().getValues();
@@ -140,9 +146,34 @@ function updateDailySummaryTable(daySheet, usersData) {
     }
   }
 
+  // Ensure exactly 2 blank rows exist above summaryTitleRow if summary exists
+  if (summaryTitleRow > 0) {
+    var blankCount = 0;
+    for (var b = summaryTitleRow - 2; b >= 1; b--) {
+      if (!sheetData[b][0] || sheetData[b][0].toString().trim() === "") {
+        blankCount++;
+      } else {
+        break;
+      }
+    }
+    // If fewer than 2 blank rows, insert missing blank rows
+    if (blankCount < 2) {
+      var rowsToInsert = 2 - blankCount;
+      daySheet.insertRowsBefore(summaryTitleRow, rowsToInsert);
+      sheetData = daySheet.getDataRange().getValues();
+      for (var r2 = 0; r2 < sheetData.length; r2++) {
+        if (sheetData[r2][0] && sheetData[r2][0].toString().indexOf("DAILY ATTENDANCE") >= 0) {
+          summaryTitleRow = r2 + 1;
+          break;
+        }
+      }
+    }
+  }
+
+  // Punches are strictly between Row 2 and the blank gap
   var punchLimit = (summaryTitleRow > 0) ? (summaryTitleRow - 3) : (sheetData.length);
 
-  // Initialize stats dictionary for all registered users in Users tab
+  // Initialize stats dictionary for users listed in "Users" tab
   var stats = {};
   for (var u = 1; u < usersData.length; u++) {
     if (!usersData[u][0]) continue;
@@ -153,12 +184,12 @@ function updateDailySummaryTable(daySheet, usersData) {
       entries: 0,
       exits: 0,
       totalSeconds: 0,
-      lastEnterSec: null,
       status: "Absent"
     };
   }
 
-  // Scan punches in chronological order
+  // Collect all punches for each user
+  var userPunches = {};
   for (var p = 1; p < punchLimit; p++) {
     if (!sheetData[p] || !sheetData[p][1]) continue;
     var pTime = sheetData[p][0];
@@ -172,59 +203,87 @@ function updateDailySummaryTable(daySheet, usersData) {
         entries: 0,
         exits: 0,
         totalSeconds: 0,
-        lastEnterSec: null,
         status: "Absent"
       };
     }
 
-    var sec = parseTimeToSeconds(pTime);
-    if (pAction === "ENTER") {
-      stats[pUid].entries++;
-      stats[pUid].lastEnterSec = sec;
-      stats[pUid].status = "🟢 Currently Inside";
-    } else if (pAction === "EXIT") {
-      stats[pUid].exits++;
-      if (stats[pUid].lastEnterSec !== null) {
-        stats[pUid].totalSeconds += Math.max(0, sec - stats[pUid].lastEnterSec);
-        stats[pUid].lastEnterSec = null;
+    if (!userPunches[pUid]) {
+      userPunches[pUid] = [];
+    }
+    userPunches[pUid].push({ time: pTime, action: pAction });
+  }
+
+  // Calculate working hours in chronological order (from oldest to newest)
+  for (var key in userPunches) {
+    var punches = userPunches[key];
+    var lastEnterSec = null;
+    var totalSec = 0;
+    var entries = 0;
+    var exits = 0;
+
+    // Punches in sheet are newest (top) to oldest (bottom)
+    // Reverse them to process from morning to evening
+    for (var k = punches.length - 1; k >= 0; k--) {
+      var item = punches[k];
+      var sec = parseTimeToSeconds(item.time);
+      if (item.action === "ENTER") {
+        entries++;
+        lastEnterSec = sec;
+      } else if (item.action === "EXIT") {
+        exits++;
+        if (lastEnterSec !== null) {
+          totalSec += Math.max(0, sec - lastEnterSec);
+          lastEnterSec = null;
+        }
       }
-      stats[pUid].status = "Checked Out";
+    }
+
+    stats[key].entries = entries;
+    stats[key].exits = exits;
+    stats[key].totalSeconds = totalSec;
+
+    // Latest punch (item 0 in userPunches) determines real-time status:
+    var latestAction = punches[0].action;
+    if (latestAction === "ENTER") {
+      stats[key].status = "Currently Inside"; // No green circle emoji
+    } else if (latestAction === "EXIT") {
+      stats[key].status = "Checked Out";
     }
   }
 
   // Prepare Summary Rows
   var summaryRows = [];
-  for (var key in stats) {
-    var user = stats[key];
-    var durationText = formatSeconds(user.totalSeconds);
-    if (user.entries === 0) {
+  for (var uidKey in stats) {
+    var usr = stats[uidKey];
+    var durationText = formatSeconds(usr.totalSeconds);
+    if (usr.entries === 0) {
       durationText = "0h 00m 00s";
-    } else if (user.status === "🟢 Currently Inside") {
+    } else if (usr.status === "Currently Inside") {
       durationText += " (Active)";
     }
 
     summaryRows.push([
-      user.name,
-      user.id,
-      user.entries,
-      user.exits,
+      usr.name,
+      usr.id,
+      usr.entries,
+      usr.exits,
       durationText,
-      user.status
+      usr.status
     ]);
   }
 
-  // If summary section doesn't exist yet, build it with 2 BLANK ROWS GAP
+  // If summary section doesn't exist yet, build it
   if (summaryTitleRow === -1) {
     daySheet.appendRow([""]); // Gap Row 1
     daySheet.appendRow([""]); // Gap Row 2
-    
+
     var titleRowIdx = daySheet.getLastRow() + 1;
     daySheet.appendRow(["📊 DAILY ATTENDANCE & WORKING HOURS SUMMARY"]);
     daySheet.getRange(titleRowIdx, 1, 1, 6).merge()
             .setBackground("#203764")
             .setFontColor("#FFFFFF")
             .setFontWeight("bold")
-            .setHorizontalAlignment("left"); // Left justified
+            .setHorizontalAlignment("left");
 
     var subHeaderIdx = titleRowIdx + 1;
     daySheet.appendRow(["Employee Name", "ID Number", "Total Entries", "Total Exits", "Total Working Hours", "Status"]);
@@ -232,20 +291,25 @@ function updateDailySummaryTable(daySheet, usersData) {
             .setBackground("#2F5597")
             .setFontColor("#FFFFFF")
             .setFontWeight("bold")
-            .setHorizontalAlignment("left"); // Left justified
+            .setHorizontalAlignment("left");
 
     for (var s = 0; s < summaryRows.length; s++) {
       daySheet.appendRow(summaryRows[s]);
       var curRow = daySheet.getLastRow();
-      daySheet.getRange(curRow, 1, 1, 6).setHorizontalAlignment("left"); // Left justified
+      daySheet.getRange(curRow, 1, 1, 6).setHorizontalAlignment("left");
     }
   } else {
     // Update existing summary rows in place
     var dataStartRow = summaryTitleRow + 2;
     if (summaryRows.length > 0) {
+      // Clear old rows in summary range to cleanly remove deleted employees
+      var currentLastRow = daySheet.getLastRow();
+      if (currentLastRow >= dataStartRow) {
+        daySheet.getRange(dataStartRow, 1, currentLastRow - dataStartRow + 1, 6).clearContent();
+      }
       var range = daySheet.getRange(dataStartRow, 1, summaryRows.length, 6);
       range.setValues(summaryRows);
-      range.setHorizontalAlignment("left"); // Left justified
+      range.setHorizontalAlignment("left");
     }
   }
 }
