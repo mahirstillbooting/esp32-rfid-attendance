@@ -1,0 +1,18 @@
+# Local working files with personal credentials
+/Attendance_ESP32.ino
+/Code.gs
+/Attendance_System.xlsx
+
+# Arduino / PlatformIO
+.vscode/
+.idea/
+*.hex
+*.bin
+*.elf
+build/
+*.bak
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
