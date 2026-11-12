@@ -111,6 +111,7 @@ function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     name: userName,
+    id: personId,
     action: nextAction,
     time: timeStr,
     sheet: todaySheetName
